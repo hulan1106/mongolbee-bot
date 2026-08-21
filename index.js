@@ -31,6 +31,10 @@ const MENU = [
     title: "Дата скрапер",
     url: "https://mongolbee.beez.mn/%d0%b1%d0%b8%d0%b7%d0%bd%d0%b5%d1%81-%d0%b4%d0%b0%d1%82%d0%b0/",
   },
+  {
+    title: "Beez QR Menu",
+    url: "https://qrmenu.beez.mn/",
+  },
 ];
 
 // --- WEBHOOK VERIFICATION ---
