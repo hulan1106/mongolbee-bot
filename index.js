@@ -5,6 +5,17 @@ const db = require("./db");
 const byl = require("./byl");
 const msg = require("./messenger");
 
+// --- SAFETY NET ---
+// A single failed Facebook/byl.mn request should never take the whole bot down.
+// This must be registered before anything else runs.
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection (not crashing):", reason?.message || reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (not crashing):", err?.message || err);
+});
+
 const app = express();
 app.use(express.json());
 
@@ -60,7 +71,11 @@ app.post("/webhook", async (req, res) => {
           await handlePptPurchase(senderId);
         } catch (err) {
           console.error("PPT purchase error:", err.response?.data || err.message);
-          await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
+          try {
+            await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
+          } catch (sendErr) {
+            console.error("Also failed to notify sender:", sendErr.response?.data || sendErr.message);
+          }
         }
         continue;
       }
@@ -81,7 +96,7 @@ async function handlePptPurchase(senderId) {
     senderId,
     `1,000 слайд, 66 төрлийн Хөдөлгөөнт PPT багц — ${PPT_PRICE_MNT.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
     invoice.url,
-    "Төлбөр төлөх"
+    "QPAY төлөх"
   );
 }
 
@@ -116,10 +131,14 @@ app.post("/webhook/byl", async (req, res) => {
     );
   } catch (err) {
     console.error("PPT delivery failed:", err.response?.data || err.message);
-    await msg.sendText(
-      order.sender_id,
-      "Татаж авах холбоосыг илгээхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
-    );
+    try {
+      await msg.sendText(
+        order.sender_id,
+        "Татаж авах холбоосыг илгээхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
+      );
+    } catch (sendErr) {
+      console.error("Also failed to notify sender of delivery error:", sendErr.response?.data || sendErr.message);
+    }
   }
 });
 
