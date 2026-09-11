@@ -79,7 +79,7 @@ async function handlePptPurchase(senderId) {
 
   await msg.sendButton(
     senderId,
-    `Хөдөлгөөнт PPT багц — ${PPT_PRICE_MNT.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
+    `1,000 слайд, 66 төрлийн Хөдөлгөөнт PPT багц — ${PPT_PRICE_MNT.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
     invoice.url,
     "Төлбөр төлөх"
   );
