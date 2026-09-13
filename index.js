@@ -101,6 +101,11 @@ async function handlePptPurchase(senderId) {
     payUrl,
     "QPAY төлөх"
   );
+
+  await msg.sendText(
+    senderId,
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+  );
 }
 
 // --- SAFARI ESCAPE PAGE (for iPhone users stuck in Messenger's in-app browser) ---
