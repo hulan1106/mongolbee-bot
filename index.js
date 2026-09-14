@@ -92,13 +92,10 @@ async function handlePptPurchase(senderId) {
   const invoice = await byl.createInvoice(PPT_PRICE_MNT, "Mongolbee - Хөдөлгөөнт PPT багц");
   await db.createOrder(senderId, invoice.id, invoice.number);
 
-  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://mongolbee-bot-production.up.railway.app";
-  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
-
   await msg.sendButton(
     senderId,
     `1,000 слайд, 66 төрлийн Хөдөлгөөнт PPT багц — ${PPT_PRICE_MNT.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
-    payUrl,
+    invoice.url,
     "QPAY төлөх"
   );
 
@@ -147,13 +144,13 @@ app.get("/pay-redirect", (req, res) => {
 <body>
   <div class="card">
     <div class="badge">ТӨЛБӨРИЙН ХОЛБООС</div>
-    <h1>Төлбөр хийхийн тулд Safari/Chrome ашиглана уу</h1>
-    <p>iPhone дээр Messenger-ийн дотоод хөтчөөр банкны апп (QPay гэх мэт) зөв нээгддэггүй тул та доорх алхмуудыг дагана уу:</p>
+    <h1>Банкны апп нээгдэхгүй бол энэ алхмуудыг хийнэ үү</h1>
+    <p>Дараагийн хуудсанд орж, банкаа сонгож дарахад заримдаа юу ч болохгүй байж болно. Ийм тохиолдолд:</p>
     <div class="steps">
       <ol>
-        <li>Дэлгэцийн дээд буланд байгаа <strong>"•••"</strong> товч дээр дарна уу</li>
-        <li><strong>"Нээх Safari-аар"</strong> эсвэл <strong>"Open in Safari/Browser"</strong> сонголтыг дарна уу</li>
-        <li>Safari дээр нээгдсэний дараа төлбөрөө хэвийн үргэлжлүүлээрэй</li>
+        <li>Доорх товч дээр дарж төлбөрийн хуудсанд орно уу</li>
+        <li>Банкаа сонгоод дарахад юу ч болохгүй бол дэлгэцийн дээд буланд байгаа <strong>"•••"</strong> товч дээр дарна уу</li>
+        <li><strong>"Нээх Safari-аар"</strong> сонголтыг дарж, дараа нь банкаа дахин сонгоно уу</li>
       </ol>
     </div>
     <a class="btn" href="${safeTargetUrl}">Төлбөрийн хуудас руу очих →</a>
