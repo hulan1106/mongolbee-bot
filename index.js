@@ -65,7 +65,7 @@ const PRODUCTS = {
     invoiceDescription: "Mongolbee - 400 Excel файл",
     paymentText: (p) =>
       `400 Excel файлын багц — ${p.priceMnt.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
-    deliveryText: "Таны 400 Excel файлын багцыг татаж авах холбоос доор байна:",
+    deliveryText: "Таны 400 Excel файлын багцыг татаж авах холбоос доор байна. Та компьютер дээр татаж авна уу.:",
     getDownloadUrl: (req) => `${getPublicBaseUrl(req)}/downloads/excel-400.zip`,
   },
 };
