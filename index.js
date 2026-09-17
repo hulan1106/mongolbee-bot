@@ -1,17 +1,16 @@
 const express = require("express");
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 
 const db = require("./db");
 const byl = require("./byl");
 const msg = require("./messenger");
 
 // --- SAFETY NET ---
-// A single failed Facebook/byl.mn request should never take the whole bot down.
-// This must be registered before anything else runs.
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection (not crashing):", reason?.message || reason);
 });
-
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception (not crashing):", err?.message || err);
 });
@@ -22,23 +21,65 @@ app.use(express.json());
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "mongolbee_verify";
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 
-// --- PPT PRODUCT ---
-const PPT_PRICE_MNT = 12000;
-const PPT_DOWNLOAD_URL = "https://drive.google.com/file/d/1fMp-vFpijrGw3Rv4dty1O0tOcMw00Mca/view";
+// Railway Volume mount path — set this same path when you create the
+// Volume in Railway's dashboard (Settings → Volumes → Mount path).
+const VOLUME_PATH = process.env.VOLUME_PATH || "/data";
+const EXCEL_FILE_PATH = path.join(VOLUME_PATH, "excel-400.zip");
 
-// Any of these typed exactly (after trim/lowercase) triggers the purchase flow.
-const PPT_TRIGGERS = [
-  "хөдөлгөөнт ppt авах",
-  "хөдөлгөөнт багц",
-  "хөдөлгөөнт ppt багц",
-  "хөдөлгөөнт ppt",
-  "powerpoint",
-  "ppt",
-];
+// Converts a Dropbox share link (?dl=0) into a direct-download link (?dl=1).
+function toDropboxDirectLink(url) {
+  if (url.includes("dl=0")) return url.replace("dl=0", "dl=1");
+  if (!url.includes("dl=1") && url.includes("dropbox.com")) {
+    return url + (url.includes("?") ? "&dl=1" : "?dl=1");
+  }
+  return url;
+}
 
-function isPptTrigger(text) {
+const EXCEL_SOURCE_URL = toDropboxDirectLink(
+  process.env.EXCEL_SOURCE_URL ||
+    "https://www.dropbox.com/scl/fi/geoi61ohgvwlpc9qyrxwf/400.zip?rlkey=y50kvv3iv8f068dx6n7se50d8&st=5gqwkleg&dl=0"
+);
+
+// --- PRODUCTS ---
+// Add more products here later by following the same shape.
+const PRODUCTS = {
+  ppt: {
+    priceMnt: 12000,
+    triggers: [
+      "хөдөлгөөнт ppt авах",
+      "хөдөлгөөнт багц",
+      "хөдөлгөөнт ppt багц",
+      "хөдөлгөөнт ppt",
+      "powerpoint",
+      "ppt",
+    ],
+    invoiceDescription: "Mongolbee - Хөдөлгөөнт PPT багц",
+    paymentText: (p) =>
+      `1,000 слайд, 66 төрлийн Хөдөлгөөнт PPT багц — ${p.priceMnt.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
+    deliveryText: "Таны Хөдөлгөөнт PPT багцыг татаж авах холбоос доор байна. Компьютер дээр татаж аваад, PowerPoint дээр нээгээд ашиглаж эхлээрэй:",
+    getDownloadUrl: () => "https://drive.google.com/file/d/1fMp-vFpijrGw3Rv4dty1O0tOcMw00Mca/view",
+  },
+  excel400: {
+    priceMnt: 49000,
+    triggers: ["400", "excel file", "файл", "400 файл", "400 excel"],
+    invoiceDescription: "Mongolbee - 400 Excel файл",
+    paymentText: (p) =>
+      `400 Excel файлын багц — ${p.priceMnt.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
+    deliveryText: "Таны 400 Excel файлын багцыг татаж авах холбоос доор байна:",
+    getDownloadUrl: (req) => `${getPublicBaseUrl(req)}/downloads/excel-400.zip`,
+  },
+};
+
+function getPublicBaseUrl(req) {
+  return process.env.PUBLIC_BASE_URL || `https://${req.get("host")}`;
+}
+
+function matchProduct(text) {
   const t = (text || "").trim().toLowerCase();
-  return PPT_TRIGGERS.includes(t);
+  for (const [key, product] of Object.entries(PRODUCTS)) {
+    if (product.triggers.includes(t)) return key;
+  }
+  return null;
 }
 
 // --- WEBHOOK VERIFICATION (unchanged) ---
@@ -64,13 +105,19 @@ app.post("/webhook", async (req, res) => {
     for (const event of entry.messaging) {
       const senderId = event.sender.id;
       const text = event.message?.text || "";
+      const quickReplyPayload = event.message?.quick_reply?.payload || event.postback?.payload || null;
 
-      // PPT purchase trigger
-      if (isPptTrigger(text)) {
+      let productKey = matchProduct(text);
+
+      if (!productKey && quickReplyPayload?.startsWith("RESTART_PRODUCT|")) {
+        productKey = quickReplyPayload.split("|")[1];
+      }
+
+      if (productKey && PRODUCTS[productKey]) {
         try {
-          await handlePptPurchase(senderId);
+          await handleProductPurchase(senderId, productKey, req);
         } catch (err) {
-          console.error("PPT purchase error:", err.response?.data || err.message);
+          console.error("Purchase error:", err.response?.data || err.message);
           try {
             await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
           } catch (sendErr) {
@@ -80,96 +127,74 @@ app.post("/webhook", async (req, res) => {
         continue;
       }
 
-      // Anything not recognized by the purchase flow is now simply ignored
-      // (fallback menu removed).
+      // Anything not recognized by a product trigger is now simply ignored.
     }
   }
 
   res.status(200).send("EVENT_RECEIVED");
 });
 
-async function handlePptPurchase(senderId) {
-  const invoice = await byl.createInvoice(PPT_PRICE_MNT, "Mongolbee - Хөдөлгөөнт PPT багц");
-  await db.createOrder(senderId, invoice.id, invoice.number);
+async function handleProductPurchase(senderId, productKey, req) {
+  const product = PRODUCTS[productKey];
+  const invoice = await byl.createInvoice(product.priceMnt, product.invoiceDescription);
+  await db.createOrder(senderId, invoice.id, invoice.number, productKey);
 
-  await msg.sendButton(
-    senderId,
-    `1,000 слайд, 66 төрлийн Хөдөлгөөнт PPT багц — ${PPT_PRICE_MNT.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
-    invoice.url,
-    "QPAY төлөх"
-  );
+  await msg.sendButton(senderId, product.paymentText(product), invoice.url, "QPAY төлөх");
 
   await msg.sendText(
     senderId,
     `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
   );
+
+  await msg.sendQuickReplies(senderId, "Төлбөр амжилтгүй болсон уу?", [
+    { title: "Дахин эхлэх", payload: `RESTART_PRODUCT|${productKey}` },
+  ]);
 }
 
-// --- SAFARI ESCAPE PAGE (for iPhone users stuck in Messenger's in-app browser) ---
-// QPay/bank apps can't open properly inside Facebook Messenger's built-in
-// browser on iOS. This page tries an automatic escape trick (x-safari-https://,
-// unreliable inside Meta's own apps but harmless to attempt) and — regardless
-// of whether that works — always shows clear manual instructions plus a
-// direct link, so nobody gets stuck on a blank screen.
-app.get("/pay-redirect", (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl || !targetUrl.startsWith("http")) {
-    return res.status(400).send("Missing or invalid url parameter");
+// --- DOWNLOAD ROUTE (serves the cached Excel file from the Volume) ---
+app.get("/downloads/excel-400.zip", (req, res) => {
+  if (!fs.existsSync(EXCEL_FILE_PATH)) {
+    return res.status(404).send("File not cached yet. Visit /admin/cache-excel first.");
   }
+  res.download(EXCEL_FILE_PATH, "400-excel-files.zip");
+});
 
-  const safariAttemptUrl = "x-safari-" + targetUrl.replace(/^https?:\/\//, "https://");
-  const safeTargetUrl = targetUrl.replace(/"/g, "&quot;");
-  const safeSafariUrl = safariAttemptUrl.replace(/"/g, "&quot;");
+// --- ADMIN: one-time fetch that caches the Excel file onto the Volume ---
+// Visit this once after setting up the Volume. Safe to call again later if
+// you ever need to re-fetch (e.g. you update the source file).
+app.get("/admin/cache-excel", async (req, res) => {
+  try {
+    fs.mkdirSync(VOLUME_PATH, { recursive: true });
+    console.log(`[cache-excel] Downloading from ${EXCEL_SOURCE_URL} ...`);
 
-  res.status(200).send(`<!DOCTYPE html>
-<html lang="mn">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Төлбөр рүү шилжиж байна...</title>
-<style>
-  body { font-family: -apple-system, sans-serif; background: #fff7fa; margin: 0; padding: 24px 16px; color: #101018; }
-  .card { max-width: 480px; margin: 0 auto; background: #fff; border: 1px solid #ffd0dd; border-radius: 16px; padding: 24px; }
-  h1 { font-size: 20px; margin: 0 0 12px; }
-  p { font-size: 15px; line-height: 1.6; color: #444; }
-  .steps { background: #fafafa; border: 1px solid #eee; border-radius: 12px; padding: 16px; margin: 16px 0; }
-  .steps ol { margin: 0; padding-left: 20px; }
-  .steps li { margin-bottom: 8px; font-size: 15px; }
-  .btn { display: block; text-align: center; background: #f71355; color: #fff; text-decoration: none;
-         padding: 14px; border-radius: 10px; font-weight: 700; font-size: 15px; margin-top: 8px; }
-  .badge { display: inline-block; background: #fff0f5; border: 1px solid #ffb8cc; border-radius: 999px;
-           color: #f71355; font-size: 12px; font-weight: 800; padding: 6px 10px; margin-bottom: 12px; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <div class="badge">ТӨЛБӨРИЙН ХОЛБООС</div>
-    <h1>Банкны апп нээгдэхгүй бол энэ алхмуудыг хийнэ үү</h1>
-    <p>Дараагийн хуудсанд орж, банкаа сонгож дарахад заримдаа юу ч болохгүй байж болно. Ийм тохиолдолд:</p>
-    <div class="steps">
-      <ol>
-        <li>Доорх товч дээр дарж төлбөрийн хуудсанд орно уу</li>
-        <li>Банкаа сонгоод дарахад юу ч болохгүй бол дэлгэцийн дээд буланд байгаа <strong>"•••"</strong> товч дээр дарна уу</li>
-        <li><strong>"Нээх Safari-аар"</strong> сонголтыг дарж, дараа нь банкаа дахин сонгоно уу</li>
-      </ol>
-    </div>
-    <a class="btn" href="${safeTargetUrl}">Төлбөрийн хуудас руу очих →</a>
-  </div>
-  <script>
-    // Best-effort automatic attempt — silently does nothing if unsupported.
-    try {
-      window.location.href = "${safeSafariUrl}";
-    } catch (e) {}
-  </script>
-</body>
-</html>`);
+    const response = await axios.get(EXCEL_SOURCE_URL, {
+      responseType: "stream",
+      maxRedirects: 5,
+      timeout: 120000,
+    });
+
+    const writer = fs.createWriteStream(EXCEL_FILE_PATH);
+    response.data.pipe(writer);
+
+    writer.on("finish", () => {
+      const sizeMb = (fs.statSync(EXCEL_FILE_PATH).size / (1024 * 1024)).toFixed(1);
+      console.log(`[cache-excel] Done. Saved ${sizeMb} MB to ${EXCEL_FILE_PATH}`);
+      res.status(200).send(`Done! Cached ${sizeMb} MB to ${EXCEL_FILE_PATH}. You can now test /downloads/excel-400.zip`);
+    });
+
+    writer.on("error", (err) => {
+      console.error("[cache-excel] Write error:", err.message);
+      res.status(500).send("Write error: " + err.message);
+    });
+  } catch (err) {
+    console.error("[cache-excel] Fetch error:", err.response?.status, err.message);
+    res.status(500).send("Fetch error: " + err.message);
+  }
 });
 
 // --- byl.mn PAYMENT WEBHOOK ---
-// Configure this URL (https://<your-mongolbee-railway-domain>/webhook/byl) as
-// the project webhook in the byl.mn dashboard, subscribed to invoice.paid.
 app.post("/webhook/byl", async (req, res) => {
-  res.status(200).send("OK"); // ack immediately, do the work after
+  res.status(200).send("OK");
 
   const event = req.body;
   if (event.type !== "invoice.paid") return;
@@ -179,23 +204,28 @@ app.post("/webhook/byl", async (req, res) => {
 
   const order = await db.getOrderByInvoiceId(invoice.id);
   if (!order) {
-    console.warn("No PPT order found for paid invoice", invoice.id);
+    console.warn("No order found for paid invoice", invoice.id);
     return;
   }
+
+  const product = PRODUCTS[order.product_key] || PRODUCTS.ppt; // fallback for safety
 
   try {
     await db.markOrderPaid(invoice.id);
     await msg.sendText(order.sender_id, "Төлбөр хүлээн авлаа ✅ Баярлалаа!");
-    await msg.sendButtons(
-      order.sender_id,
-      "Таны Хөдөлгөөнт PPT багцыг татаж авах холбоос доор байна. Компьютер дээр татаж аваад, PowerPoint дээр нээгээд ашиглаж эхлээрэй:",
-      [
-        { title: "Татаж авах", url: PPT_DOWNLOAD_URL },
+
+    const downloadUrl = product.getDownloadUrl(req);
+
+    if (order.product_key === "ppt") {
+      await msg.sendButtons(order.sender_id, product.deliveryText, [
+        { title: "Татаж авах", url: downloadUrl },
         { title: "Excel файл үзэх", url: "https://mongolbee.beez.mn/" },
-      ]
-    );
+      ]);
+    } else {
+      await msg.sendButton(order.sender_id, product.deliveryText, downloadUrl, "Татаж авах");
+    }
   } catch (err) {
-    console.error("PPT delivery failed:", err.response?.data || err.message);
+    console.error("Delivery failed:", err.response?.data || err.message);
     try {
       await msg.sendText(
         order.sender_id,
