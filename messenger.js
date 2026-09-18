@@ -47,4 +47,16 @@ function sendButtons(recipientId, text, buttons) {
   });
 }
 
-module.exports = { sendText, sendButton, sendButtons };
+// quickReplies: [{ title, payload }]
+function sendQuickReplies(recipientId, text, quickReplies) {
+  return send(recipientId, {
+    text,
+    quick_replies: quickReplies.map((qr) => ({
+      content_type: "text",
+      title: qr.title,
+      payload: qr.payload,
+    })),
+  });
+}
+
+module.exports = { sendText, sendButton, sendButtons, sendQuickReplies };
