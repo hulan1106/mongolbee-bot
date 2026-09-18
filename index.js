@@ -51,7 +51,8 @@ const PRODUCTS = {
       "хөдөлгөөнт ppt багц",
       "хөдөлгөөнт ppt",
       "powerpoint",
-      "ppt",
+      "ppt"
+      "хөдөлгөөнтэй PPT загвар",
     ],
     invoiceDescription: "Mongolbee - Хөдөлгөөнт PPT багц",
     paymentText: (p) =>
