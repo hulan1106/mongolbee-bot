@@ -18,12 +18,18 @@ async function createOrder(senderId, invoiceId, invoiceNumber, productKey) {
 }
 
 async function getOrderByInvoiceId(invoiceId) {
-  const { rows } = await query(`SELECT * FROM ppt_orders WHERE invoice_id = $1`, [String(invoiceId)]);
+  const { rows } = await query(
+    `SELECT * FROM ppt_orders WHERE invoice_id = $1 OR invoice_number = $1`,
+    [String(invoiceId)]
+  );
   return rows[0] || null;
 }
 
 async function markOrderPaid(invoiceId) {
-  await query(`UPDATE ppt_orders SET status = 'PAID' WHERE invoice_id = $1`, [String(invoiceId)]);
+  await query(
+    `UPDATE ppt_orders SET status = 'PAID' WHERE invoice_id = $1 OR invoice_number = $1`,
+    [String(invoiceId)]
+  );
 }
 
 module.exports = { pool, createOrder, getOrderByInvoiceId, markOrderPaid };
