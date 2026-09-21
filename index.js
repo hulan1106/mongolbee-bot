@@ -1,4 +1,4 @@
-const express = require("express");
+    const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -198,6 +198,7 @@ app.post("/webhook/byl", async (req, res) => {
   res.status(200).send("OK");
 
   const event = req.body;
+  console.log("[byl webhook] raw payload:", JSON.stringify(event)); // TEMP: remove once field names are confirmed
   if (event.type !== "invoice.paid") return;
 
   const invoice = event.data?.object;
@@ -205,7 +206,7 @@ app.post("/webhook/byl", async (req, res) => {
 
   const order = await db.getOrderByInvoiceId(invoice.id);
   if (!order) {
-    console.warn("No order found for paid invoice", invoice.id);
+    console.warn("No order found for paid invoice", invoice.id, "| number:", invoice.number);
     return;
   }
 
