@@ -166,7 +166,7 @@ const BANK_TRANSFER_INFO = {
 
 async function askPaymentMethod(senderId, productKey) {
   const product = PRODUCTS[productKey];
-  await msg.sendQuickReplies(
+  await msg.sendButtons(
     senderId,
     `${product.invoiceDescription.replace("Mongolbee - ", "")} — ${product.priceMnt.toLocaleString()}₮. Хэрхэн төлөх вэ?`,
     [
