@@ -1,4 +1,4 @@
-    const express = require("express");
+const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -52,7 +52,6 @@ const PRODUCTS = {
       "хөдөлгөөнт ppt",
       "powerpoint",
       "ppt",
-      "хөдөлгөөнтэй PPT загвар",
     ],
     invoiceDescription: "Mongolbee - Хөдөлгөөнт PPT багц",
     paymentText: (p) =>
@@ -66,7 +65,7 @@ const PRODUCTS = {
     invoiceDescription: "Mongolbee - 400 Excel файл",
     paymentText: (p) =>
       `400 Excel файлын багц — ${p.priceMnt.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
-    deliveryText: "Таны 400 Excel файлын багцыг татаж авах холбоос доор байна. Та компьютер дээр татаж авна уу.:",
+    deliveryText: "Таны 400 Excel файлын багцыг татаж авах холбоос доор байна:",
     getDownloadUrl: (req) => `${getPublicBaseUrl(req)}/downloads/excel-400.zip`,
   },
 };
@@ -114,9 +113,21 @@ app.post("/webhook", async (req, res) => {
         productKey = quickReplyPayload.split("|")[1];
       }
 
+      // A recognized product trigger asks HOW they want to pay first.
       if (productKey && PRODUCTS[productKey]) {
         try {
-          await handleProductPurchase(senderId, productKey, req);
+          await askPaymentMethod(senderId, productKey);
+        } catch (err) {
+          console.error("askPaymentMethod error:", err.response?.data || err.message);
+        }
+        continue;
+      }
+
+      // Payment method chosen via quick reply.
+      if (quickReplyPayload?.startsWith("PAY_QPAY|")) {
+        const key = quickReplyPayload.split("|")[1];
+        try {
+          await handleProductPurchase(senderId, key, req);
         } catch (err) {
           console.error("Purchase error:", err.response?.data || err.message);
           try {
@@ -128,12 +139,59 @@ app.post("/webhook", async (req, res) => {
         continue;
       }
 
+      if (quickReplyPayload?.startsWith("PAY_BANK|")) {
+        const key = quickReplyPayload.split("|")[1];
+        try {
+          await sendBankTransferInfo(senderId, key);
+        } catch (err) {
+          console.error("sendBankTransferInfo error:", err.response?.data || err.message);
+        }
+        continue;
+      }
+
       // Anything not recognized by a product trigger is now simply ignored.
     }
   }
 
   res.status(200).send("EVENT_RECEIVED");
 });
+
+// --- BANK TRANSFER (manual, no automated confirmation) ---
+const BANK_TRANSFER_INFO = {
+  bankName: "Худалдаа хөгжлийн банк",
+  accountNumber: "416075929",
+  accountName: "Хулан",
+  iban: "MN270004000416075929",
+};
+
+async function askPaymentMethod(senderId, productKey) {
+  const product = PRODUCTS[productKey];
+  await msg.sendQuickReplies(
+    senderId,
+    `${product.invoiceDescription.replace("Mongolbee - ", "")} — ${product.priceMnt.toLocaleString()}₮. Хэрхэн төлөх вэ?`,
+    [
+      { title: "QPAY-ээр төлөх", payload: `PAY_QPAY|${productKey}` },
+      { title: "Дансаар шилжүүлэх", payload: `PAY_BANK|${productKey}` },
+    ]
+  );
+}
+
+async function sendBankTransferInfo(senderId, productKey) {
+  const product = PRODUCTS[productKey];
+  const productName = product.invoiceDescription.replace("Mongolbee - ", "");
+
+  await msg.sendText(
+    senderId,
+    `${productName}\n\n` +
+      `Банк: ${BANK_TRANSFER_INFO.bankName}\n` +
+      `Дансны дугаар: ${BANK_TRANSFER_INFO.accountNumber}\n` +
+      `Дансны нэр: ${BANK_TRANSFER_INFO.accountName}\n` +
+      `Гүйлгээний утга: Имэйл хаяг\n` +
+      `Дүн: ₮${product.priceMnt.toLocaleString()}\n` +
+      `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
+      `Шилжүүлгийн утга дээр имэйл хаягаа бичнэ үү. Төлбөр батлагдсаны дараа татаж авах холбоосыг энд илгээх болно.`
+  );
+}
 
 async function handleProductPurchase(senderId, productKey, req) {
   const product = PRODUCTS[productKey];
@@ -198,7 +256,6 @@ app.post("/webhook/byl", async (req, res) => {
   res.status(200).send("OK");
 
   const event = req.body;
-  console.log("[byl webhook] raw payload:", JSON.stringify(event)); // TEMP: remove once field names are confirmed
   if (event.type !== "invoice.paid") return;
 
   const invoice = event.data?.object;
@@ -206,7 +263,7 @@ app.post("/webhook/byl", async (req, res) => {
 
   const order = await db.getOrderByInvoiceId(invoice.id);
   if (!order) {
-    console.warn("No order found for paid invoice", invoice.id, "| number:", invoice.number);
+    console.warn("No order found for paid invoice", invoice.id);
     return;
   }
 
