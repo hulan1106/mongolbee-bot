@@ -55,7 +55,7 @@ const PRODUCTS = {
     ],
     invoiceDescription: "Mongolbee - Хөдөлгөөнт PPT багц",
     paymentText: (p) =>
-      `1,000 слайд, 66 төрлийн Хөдөлгөөнт PPT багц — ${p.priceMnt.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
+      `1,000 слайд, 66 төрлийн Хөдөлгөөнт PPT багц — ${p.priceMnt.toLocaleString()}₮. Хэрхэн төлөх вэ?`,
     deliveryText: "Таны Хөдөлгөөнт PPT багцыг татаж авах холбоос доор байна. Компьютер дээр татаж аваад, PowerPoint дээр нээгээд ашиглаж эхлээрэй:",
     getDownloadUrl: () => "https://drive.google.com/file/d/1fMp-vFpijrGw3Rv4dty1O0tOcMw00Mca/view",
   },
@@ -64,7 +64,7 @@ const PRODUCTS = {
     triggers: ["400", "excel file", "файл", "400 файл", "400 excel"],
     invoiceDescription: "Mongolbee - 400 Excel файл",
     paymentText: (p) =>
-      `400 Excel файлын багц — ${p.priceMnt.toLocaleString()}₮. Төлбөр төлөгдмөгц таны чат руу илгээх болно:`,
+      `400 Excel файлын багц — ${p.priceMnt.toLocaleString()}₮. Хэрхэн төлөх вэ?`,
     deliveryText: "Таны 400 Excel файлын багцыг татаж авах холбоос доор байна:",
     getDownloadUrl: (req) => `${getPublicBaseUrl(req)}/downloads/excel-400.zip`,
   },
@@ -113,23 +113,13 @@ app.post("/webhook", async (req, res) => {
         productKey = quickReplyPayload.split("|")[1];
       }
 
-      // A recognized product trigger asks HOW they want to pay first.
+      // A recognized product trigger goes straight to the payment options —
+      // QPAY button is already the real payment link, no extra click needed.
       if (productKey && PRODUCTS[productKey]) {
         try {
-          await askPaymentMethod(senderId, productKey);
+          await offerPayment(senderId, productKey, req);
         } catch (err) {
-          console.error("askPaymentMethod error:", err.response?.data || err.message);
-        }
-        continue;
-      }
-
-      // Payment method chosen via quick reply.
-      if (quickReplyPayload?.startsWith("PAY_QPAY|")) {
-        const key = quickReplyPayload.split("|")[1];
-        try {
-          await handleProductPurchase(senderId, key, req);
-        } catch (err) {
-          console.error("Purchase error:", err.response?.data || err.message);
+          console.error("offerPayment error:", err.response?.data || err.message);
           try {
             await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
           } catch (sendErr) {
@@ -164,16 +154,27 @@ const BANK_TRANSFER_INFO = {
   iban: "MN270004000416075929",
 };
 
-async function askPaymentMethod(senderId, productKey) {
+// Creates the invoice immediately and presents QPAY (direct link) and bank
+// transfer (postback) as two buttons in one message — no extra "which
+// payment method?" step before reaching the real payment link.
+async function offerPayment(senderId, productKey, req) {
   const product = PRODUCTS[productKey];
-  await msg.sendButtons(
+  const invoice = await byl.createInvoice(product.priceMnt, product.invoiceDescription);
+  await db.createOrder(senderId, invoice.id, invoice.number, productKey);
+
+  await msg.sendButtons(senderId, product.paymentText(product), [
+    { title: "QPAY-ээр төлөх", url: invoice.url },
+    { title: "Дансаар шилжүүлэх", payload: `PAY_BANK|${productKey}` },
+  ]);
+
+  await msg.sendText(
     senderId,
-    `${product.invoiceDescription.replace("Mongolbee - ", "")} — ${product.priceMnt.toLocaleString()}₮. Хэрхэн төлөх вэ?`,
-    [
-      { title: "QPAY-ээр төлөх", payload: `PAY_QPAY|${productKey}` },
-      { title: "Дансаар шилжүүлэх", payload: `PAY_BANK|${productKey}` },
-    ]
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
   );
+
+  await msg.sendQuickReplies(senderId, "Төлбөр амжилтгүй болсон уу?", [
+    { title: "Дахин эхлэх", payload: `RESTART_PRODUCT|${productKey}` },
+  ]);
 }
 
 async function sendBankTransferInfo(senderId, productKey) {
@@ -193,23 +194,6 @@ async function sendBankTransferInfo(senderId, productKey) {
   );
 }
 
-async function handleProductPurchase(senderId, productKey, req) {
-  const product = PRODUCTS[productKey];
-  const invoice = await byl.createInvoice(product.priceMnt, product.invoiceDescription);
-  await db.createOrder(senderId, invoice.id, invoice.number, productKey);
-
-  await msg.sendButton(senderId, product.paymentText(product), invoice.url, "QPAY төлөх");
-
-  await msg.sendText(
-    senderId,
-    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
-  );
-
-  await msg.sendQuickReplies(senderId, "Төлбөр амжилтгүй болсон уу?", [
-    { title: "Дахин эхлэх", payload: `RESTART_PRODUCT|${productKey}` },
-  ]);
-}
-
 // --- DOWNLOAD ROUTE (serves the cached Excel file from the Volume) ---
 app.get("/downloads/excel-400.zip", (req, res) => {
   if (!fs.existsSync(EXCEL_FILE_PATH)) {
@@ -219,8 +203,6 @@ app.get("/downloads/excel-400.zip", (req, res) => {
 });
 
 // --- ADMIN: one-time fetch that caches the Excel file onto the Volume ---
-// Visit this once after setting up the Volume. Safe to call again later if
-// you ever need to re-fetch (e.g. you update the source file).
 app.get("/admin/cache-excel", async (req, res) => {
   try {
     fs.mkdirSync(VOLUME_PATH, { recursive: true });
