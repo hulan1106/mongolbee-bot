@@ -119,7 +119,7 @@ async function extractReceipt(imageUrl) {
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY
   const r = await client.messages.create({
     model: MODEL,
-    max_tokens: 300,
+    max_tokens: 1500,
     messages: [
       {
         role: "user",
@@ -132,7 +132,17 @@ async function extractReceipt(imageUrl) {
   });
   const text = r.content.find((b) => b.type === "text")?.text || "";
   const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("No JSON in vision reply");
+  if (!m) {
+    console.error(
+      "[bank] vision reply had no JSON. stop_reason:",
+      r.stop_reason,
+      "blocks:",
+      r.content.map((b) => b.type).join(","),
+      "text:",
+      text.slice(0, 500)
+    );
+    throw new Error("No JSON in vision reply");
+  }
   return JSON.parse(m[0]);
 }
 
