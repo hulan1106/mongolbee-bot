@@ -6,6 +6,7 @@ const path = require("path");
 const db = require("./db");
 const byl = require("./byl");
 const msg = require("./messenger");
+const bank = require("./bank");
 
 // --- SAFETY NET ---
 process.on("unhandledRejection", (reason) => {
@@ -20,6 +21,7 @@ app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "mongolbee_verify";
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
+const BANK_WEBHOOK_SECRET = process.env.BANK_WEBHOOK_SECRET;
 
 // Railway Volume mount path — set this same path when you create the
 // Volume in Railway's dashboard (Settings → Volumes → Mount path).
@@ -82,6 +84,23 @@ function matchProduct(text) {
   return null;
 }
 
+// Sends the download link for a paid product. Used by both byl (QPay) and bank-transfer payments.
+async function deliverProduct(senderId, productKey, req) {
+  const product = PRODUCTS[productKey] || PRODUCTS.ppt; // fallback for safety
+  const downloadUrl = product.getDownloadUrl(req);
+
+  if (productKey === "ppt") {
+    await msg.sendButtons(senderId, product.deliveryText, [
+      { title: "Татаж авах", url: downloadUrl },
+      { title: "Excel файл үзэх", url: "https://mongolbee.beez.mn/" },
+    ]);
+  } else {
+    await msg.sendButton(senderId, product.deliveryText, downloadUrl, "Татаж авах");
+  }
+}
+
+bank.init({ msg, products: PRODUCTS, deliver: deliverProduct });
+
 // --- WEBHOOK VERIFICATION (unchanged) ---
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -106,6 +125,21 @@ app.post("/webhook", async (req, res) => {
       const senderId = event.sender.id;
       const text = event.message?.text || "";
       const quickReplyPayload = event.message?.quick_reply?.payload || event.postback?.payload || null;
+
+      // A photo (not a sticker / like button) = possible bank-transfer receipt.
+      // Not awaited on purpose: reading the screenshot takes a few seconds and
+      // Messenger expects this webhook to answer quickly.
+      const imageAttachment = event.message?.attachments?.find(
+        (a) => a.type === "image" && !a.payload?.sticker_id
+      );
+      if (imageAttachment && !event.message?.is_echo) {
+        if (!bank.seenBefore(event.message.mid)) {
+          bank
+            .handleScreenshot({ senderId, imageUrl: imageAttachment.payload.url, req })
+            .catch((err) => console.error("handleScreenshot error:", err.response?.data || err.message));
+        }
+        continue;
+      }
 
       let productKey = matchProduct(text);
 
@@ -132,6 +166,7 @@ app.post("/webhook", async (req, res) => {
       if (quickReplyPayload?.startsWith("PAY_BANK|")) {
         const key = quickReplyPayload.split("|")[1];
         try {
+          bank.setPending(senderId, key);
           await sendBankTransferInfo(senderId, key);
         } catch (err) {
           console.error("sendBankTransferInfo error:", err.response?.data || err.message);
@@ -146,7 +181,7 @@ app.post("/webhook", async (req, res) => {
   res.status(200).send("EVENT_RECEIVED");
 });
 
-// --- BANK TRANSFER (manual, no automated confirmation) ---
+// --- BANK TRANSFER (verified against the real bank email) ---
 const BANK_TRANSFER_INFO = {
   bankName: "Худалдаа хөгжлийн банк",
   accountNumber: "416075929",
@@ -190,9 +225,28 @@ async function sendBankTransferInfo(senderId, productKey) {
       `Гүйлгээний утга: Имэйл хаяг\n` +
       `Дүн: ₮${product.priceMnt.toLocaleString()}\n` +
       `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
-      `Шилжүүлгийн утга дээр имэйл хаягаа бичнэ үү. Төлбөр батлагдсаны дараа татаж авах холбоосыг энд илгээх болно.`
+      `Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц татаж авах холбоосыг автоматаар илгээнэ.`
   );
 }
+
+// --- BANK DEPOSIT WEBHOOK (called by the Gmail Apps Script) ---
+app.post("/webhook/bank", async (req, res) => {
+  if (!BANK_WEBHOOK_SECRET) return res.status(503).send("BANK_WEBHOOK_SECRET not set");
+  if (req.get("x-bank-secret") !== BANK_WEBHOOK_SECRET) return res.sendStatus(401);
+
+  const { id, amount, receivedAt } = req.body || {};
+  if (!id || !Number.isFinite(Number(amount)) || !Number.isFinite(Number(receivedAt))) {
+    return res.sendStatus(400);
+  }
+
+  res.status(200).send("OK");
+
+  try {
+    await bank.onDeposit({ id: String(id), amount: Number(amount), receivedAt: Number(receivedAt) }, req);
+  } catch (err) {
+    console.error("onDeposit error:", err.response?.data || err.message);
+  }
+});
 
 // --- DOWNLOAD ROUTE (serves the cached Excel file from the Volume) ---
 app.get("/downloads/excel-400.zip", (req, res) => {
@@ -249,22 +303,10 @@ app.post("/webhook/byl", async (req, res) => {
     return;
   }
 
-  const product = PRODUCTS[order.product_key] || PRODUCTS.ppt; // fallback for safety
-
   try {
     await db.markOrderPaid(invoice.id);
     await msg.sendText(order.sender_id, "Төлбөр хүлээн авлаа ✅ Баярлалаа!");
-
-    const downloadUrl = product.getDownloadUrl(req);
-
-    if (order.product_key === "ppt") {
-      await msg.sendButtons(order.sender_id, product.deliveryText, [
-        { title: "Татаж авах", url: downloadUrl },
-        { title: "Excel файл үзэх", url: "https://mongolbee.beez.mn/" },
-      ]);
-    } else {
-      await msg.sendButton(order.sender_id, product.deliveryText, downloadUrl, "Татаж авах");
-    }
+    await deliverProduct(order.sender_id, order.product_key, req);
   } catch (err) {
     console.error("Delivery failed:", err.response?.data || err.message);
     try {
