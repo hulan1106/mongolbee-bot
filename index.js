@@ -163,6 +163,23 @@ app.post("/webhook", async (req, res) => {
         continue;
       }
 
+      if (quickReplyPayload?.startsWith("PAY_QPAY|")) {
+        const key = quickReplyPayload.split("|")[1];
+        if (PRODUCTS[key]) {
+          try {
+            await sendQpayLink(senderId, key);
+          } catch (err) {
+            console.error("sendQpayLink error:", err.response?.data || err.message);
+            try {
+              await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
+            } catch (sendErr) {
+              console.error("Also failed to notify sender:", sendErr.response?.data || sendErr.message);
+            }
+          }
+        }
+        continue;
+      }
+
       if (quickReplyPayload?.startsWith("PAY_BANK|")) {
         const key = quickReplyPayload.split("|")[1];
         try {
@@ -194,13 +211,21 @@ const BANK_TRANSFER_INFO = {
 // payment method?" step before reaching the real payment link.
 async function offerPayment(senderId, productKey, req) {
   const product = PRODUCTS[productKey];
+
+  // No invoice yet — it is only created if the customer chooses QPAY.
+  await msg.sendButtons(senderId, product.paymentText(product), [
+    { title: "QPAY-ээр төлөх", payload: `PAY_QPAY|${productKey}` },
+    { title: "Дансаар шилжүүлэх", payload: `PAY_BANK|${productKey}` },
+  ]);
+}
+
+// Customer chose QPAY: create the byl invoice now and send the payment link.
+async function sendQpayLink(senderId, productKey) {
+  const product = PRODUCTS[productKey];
   const invoice = await byl.createInvoice(product.priceMnt, product.invoiceDescription);
   await db.createOrder(senderId, invoice.id, invoice.number, productKey);
 
-  await msg.sendButtons(senderId, product.paymentText(product), [
-    { title: "QPAY-ээр төлөх", url: invoice.url },
-    { title: "Дансаар шилжүүлэх", payload: `PAY_BANK|${productKey}` },
-  ]);
+  await msg.sendButton(senderId, "Доорх товчийг дарж QPAY-ээр төлнө үү:", invoice.url, "QPAY-ээр төлөх");
 
   await msg.sendText(
     senderId,
