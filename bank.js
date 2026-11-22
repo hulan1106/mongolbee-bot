@@ -19,7 +19,11 @@ const STORE_PATH = path.join(VOLUME_PATH, "bank-store.json");
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-haiku-5-5";
 // Digits of YOUR account as shown on a customer's receipt (recipient side).
-const ACCOUNT_DIGITS = process.env.RECEIPT_ACCOUNT_DIGITS || "416075929";
+// TDB shows the same account in two formats, so either number is accepted.
+const ACCOUNT_DIGITS = (process.env.RECEIPT_ACCOUNT_DIGITS || "416075929,4003312175")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 const OWNER_PSID = process.env.OWNER_PSID || ""; // optional: your own Messenger ID for alerts
 
 const MIN = 60 * 1000;
@@ -228,7 +232,7 @@ async function handleScreenshot({ senderId, imageUrl, req }) {
 
   // Receiving account must be ours.
   const recipientDigits = String(receipt.recipient_account || "").replace(/\D/g, "");
-  if (recipientDigits && !recipientDigits.includes(ACCOUNT_DIGITS)) {
+  if (recipientDigits && !ACCOUNT_DIGITS.some((a) => recipientDigits.includes(a))) {
     await msg.sendText(senderId, "Баримт дээрх хүлээн авагчийн данс манай данс биш байна. Дансны мэдээллээ шалгана уу.");
     return;
   }
