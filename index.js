@@ -123,6 +123,13 @@ app.post("/webhook", async (req, res) => {
   for (const entry of body.entry) {
     for (const event of entry.messaging) {
       const senderId = event.sender.id;
+
+      // Ignore the page's own messages (echoes) and delivery/read receipts, so the
+      // bot never answers itself.
+      if (senderId === entry.id) continue;
+      if (event.message?.is_echo) continue;
+      if (!event.message && !event.postback) continue;
+
       const text = event.message?.text || "";
       const quickReplyPayload = event.message?.quick_reply?.payload || event.postback?.payload || null;
 
@@ -145,6 +152,11 @@ app.post("/webhook", async (req, res) => {
 
       if (!productKey && quickReplyPayload?.startsWith("RESTART_PRODUCT|")) {
         productKey = quickReplyPayload.split("|")[1];
+      }
+
+      // Main-menu button "PowerPoint авах" goes straight to the payment options.
+      if (!productKey && quickReplyPayload === "MENU_PPT") {
+        productKey = "ppt";
       }
 
       // A recognized product trigger goes straight to the payment options —
@@ -191,12 +203,31 @@ app.post("/webhook", async (req, res) => {
         continue;
       }
 
-      // Anything not recognized by a product trigger is now simply ignored.
+      // Anything else the customer types gets the main menu. Stickers, likes and
+      // other non-text messages are ignored.
+      if (text.trim() || quickReplyPayload === "GET_STARTED") {
+        try {
+          await sendMainMenu(senderId);
+        } catch (err) {
+          console.error("sendMainMenu error:", err.response?.data || err.message);
+        }
+      }
     }
   }
 
   res.status(200).send("EVENT_RECEIVED");
 });
+
+// --- MAIN MENU ---
+// Two buttons: PowerPoint (goes to the payment options) and the business
+// template website (opens the link directly). Button titles must stay at 20
+// characters or fewer.
+async function sendMainMenu(senderId) {
+  await msg.sendButtons(senderId, "Сайн байна уу! 🐝 Mongolbee-д тавтай морил. Та сонголтоо хийнэ үү:", [
+    { title: "PowerPoint авах", payload: "MENU_PPT" },
+    { title: "Бизнес тэмплэт үзэх", url: "https://mongolbee.beez.mn/" },
+  ]);
+}
 
 // --- BANK TRANSFER (verified against the real bank email) ---
 const BANK_TRANSFER_INFO = {
@@ -247,10 +278,10 @@ async function sendBankTransferInfo(senderId, productKey) {
       `Банк: ${BANK_TRANSFER_INFO.bankName}\n` +
       `Дансны дугаар: ${BANK_TRANSFER_INFO.accountNumber}\n` +
       `Дансны нэр: ${BANK_TRANSFER_INFO.accountName}\n` +
-      `Гүйлгээний утга: Өөрийн нэр\n` +
+      `Гүйлгээний утга: Имэйл хаяг\n` +
       `Дүн: ₮${product.priceMnt.toLocaleString()}\n` +
       `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
-      `Шилжүүлсний дараа гүйлгээ АМЖИЛТТАЙ баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц татаж авах холбоосыг автоматаар илгээнэ.`
+      `Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц татаж авах холбоосыг автоматаар илгээнэ.`
   );
 }
 
