@@ -278,7 +278,7 @@ async function sendBankTransferInfo(senderId, productKey) {
       `Банк: ${BANK_TRANSFER_INFO.bankName}\n` +
       `Дансны дугаар: ${BANK_TRANSFER_INFO.accountNumber}\n` +
       `Дансны нэр: ${BANK_TRANSFER_INFO.accountName}\n` +
-      `Гүйлгээний утга: Имэйл хаяг\n` +
+      `Гүйлгээний утга: PPT\n` +
       `Дүн: ₮${product.priceMnt.toLocaleString()}\n` +
       `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
       `Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц татаж авах холбоосыг автоматаар илгээнэ.`
